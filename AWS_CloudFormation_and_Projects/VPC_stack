@@ -1,1 +1,553 @@
-echo 123
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Two VPCs with public and private subnets, routing, and outputs
+
+Parameters:
+  Vpc1Name:
+    Type: String
+    Description: Provide the name for the first VPC
+    Default: Simple-VPC
+
+  SimpleVPCCIDR:
+    Type: String
+    Default: 30.0.0.0/16
+
+  Vpc2Name:
+    Type: String
+    Description: Provide the name for the second VPC
+    Default: Additional-VPC
+
+  AdditionalVPCCIDR:
+    Type: String
+    Default: 40.0.0.0/16
+
+Resources:
+
+  #########################
+  # First VPC: Simple-VPC
+  #########################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref SimpleVPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref Vpc1Name
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Simple-IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]  # us-east-1a
+      CidrBlock: !Select 
+        - 1
+        - !Cidr
+            - !Ref SimpleVPCCIDR   # 10.0.0.0/16
+            - 5                    # Number of subnets to generate
+            - 8                    # New subnet mask: /16 + 8 = /24 result 30.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc1Name, "PublicSubnet1", !Select [0, !GetAZs ""], !Select [1, !Cidr [!Ref SimpleVPCCIDR, 5, 8]]]]
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]  # us-east-1a
+      CidrBlock: !Select 
+        - 2
+        - !Cidr
+          - !Ref SimpleVPCCIDR    # 10.0.0.0/16
+          - 5                     # Number of subnets to generate
+          - 8                     # New subnet mask: /16 + 8 = /24 the result is: 30.0.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc1Name, "PrivateSubnet1", !Select [0, !GetAZs ""], !Select [2, !Cidr [!Ref SimpleVPCCIDR, 5, 8]]]]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Simple-PublicRT
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Simple-PrivateRT
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  ##############################
+  # Second VPC: Additional-VPC
+  ##############################
+
+  AdditionalVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref AdditionalVPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref Vpc2Name
+
+  AdditionalInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Additional-IGW
+
+  AdditionalInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      InternetGatewayId: !Ref AdditionalInternetGateway
+
+  # Public Subnet A1
+  SubnetA1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]  # us-east-1a
+      CidrBlock: !Select 
+        - 1
+        - !Cidr
+          - !Ref AdditionalVPCCIDR # 40.0.0.0/16
+          - 5                     # Number of subnets to generate
+          - 8                     # New subnet mask: /16 + 8 = /24 the result is: 40.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc2Name, "PublicSubnet1", !Select [0, !GetAZs ""], !Select [1, !Cidr [!Ref AdditionalVPCCIDR, 5, 8]]]]
+
+  # Private Subnet A2
+  SubnetA2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]  # us-east-1a
+      CidrBlock: !Select 
+        - 2
+        - !Cidr
+          - !Ref AdditionalVPCCIDR # 40.0.0.0/16
+          - 5                     # Number of subnets to generate
+          - 8                     # New subnet mask: /16 + 8 = /24 the result is: 40.0.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc2Name, "PrivateSubnet1", !Select [0, !GetAZs ""], !Select [2, !Cidr [!Ref AdditionalVPCCIDR, 5, 8]]]]
+
+  # Public Subnet B1
+  SubnetB1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]  # us-east-1b
+      CidrBlock: !Select 
+        - 3
+        - !Cidr
+          - !Ref AdditionalVPCCIDR # 40.0.0.0/16
+          - 5                     # Number of subnets to generate
+          - 8                     # New subnet mask: /16 + 8 = /24 the result is: 40.0.3.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc2Name, "PublicSubnet2", !Select [1, !GetAZs ""], !Select [3, !Cidr [!Ref AdditionalVPCCIDR, 5, 8]]]]
+
+  # Private Subnet B2
+  SubnetB2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]  # us-east-1b
+      CidrBlock: !Select
+        - 4
+        - !Cidr
+          - !Ref AdditionalVPCCIDR # 40.0.0.0/16
+          - 5                     # Number of subnets to generate
+          - 8                     # New subnet mask: /16 + 8 = /24 the result is: 40.0.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref Vpc2Name, "PrivateSubnet2", !Select [1, !GetAZs ""], !Select [4, !Cidr [!Ref AdditionalVPCCIDR, 5, 8]]]]
+
+  # Route Tables
+  AdditionalPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      Tags:
+        - Key: Name
+          Value: Additional-PublicRT
+
+  AdditionalPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      Tags:
+        - Key: Name
+          Value: Additional-PrivateRT
+
+  # Public Route to Internet Gateway
+  AdditionalPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AdditionalInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref AdditionalPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref AdditionalInternetGateway
+
+  # Route Table Associations
+  SubnetA1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA1
+      RouteTableId: !Ref AdditionalPublicRouteTable
+
+  SubnetB1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB1
+      RouteTableId: !Ref AdditionalPublicRouteTable
+
+  SubnetA2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA2
+      RouteTableId: !Ref AdditionalPrivateRouteTable
+
+  SubnetB2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB2
+      RouteTableId: !Ref AdditionalPrivateRouteTable
+  
+  ##############################################
+  # S3 VPC Endpoint
+  ##############################################
+
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      VpcEndpointType: Gateway
+      
+  ##############################################
+  # VPC Peering: Simple-VPC <-> Additional-VPC
+  ##############################################
+
+  PeeringSimpleToAdditionalPrivateVpcs:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref VPC                   # Simple-VPC
+      PeerVpcId: !Ref AdditionalVPC    # Additional-VPC
+      Tags:
+        - Key: Name
+          Value: PeeringSimpleToAdditionalPrivateVpcs
+
+  ######################################################
+  # Route from Simple-PrivateRT to Additional VPC CIDR
+  ######################################################
+
+  PrivateRouteToAdditionalVPC:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 40.0.0.0/16
+      VpcPeeringConnectionId: !Ref PeeringSimpleToAdditionalPrivateVpcs
+
+  ######################################################
+  # Route from Additional-PrivateRT to Simple VPC CIDR
+  ######################################################
+
+  AdditionalPrivateRouteToSimpleVPC:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AdditionalPrivateRouteTable
+      DestinationCidrBlock: 30.0.0.0/16
+      VpcPeeringConnectionId: !Ref PeeringSimpleToAdditionalPrivateVpcs
+
+  ######################################################
+  # Security Groups (for each VPC)
+  ######################################################
+
+  SimpleVPCSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow all traffic
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Simple-VPC-All-Traffic-SG
+
+  AdditionalVPCSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow all traffic
+      VpcId: !Ref AdditionalVPC
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Additional-VPC-All-Traffic-SG
+
+  ######################################################
+  # Network ACLs (for each VPC)
+  ######################################################
+
+  SimpleVPCNetworkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Simple-VPC-Allow-All-NACL
+
+  SimpleVPCNaclIngress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref SimpleVPCNetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+
+  SimpleVPCNaclEgress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref SimpleVPCNetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  SimplePublicSubnetAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      NetworkAclId: !Ref SimpleVPCNetworkAcl
+
+  SimplePrivateSubnetAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      NetworkAclId: !Ref SimpleVPCNetworkAcl
+
+  AdditionalVPCNetworkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref AdditionalVPC
+      Tags:
+        - Key: Name
+          Value: Additional-VPC-Allow-All-NACL
+
+  AdditionalVPCNaclIngress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+
+  AdditionalVPCNaclEgress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  AdditionalSubnetA1AclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetA1
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+
+  AdditionalSubnetA2AclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetA2
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+
+  AdditionalSubnetB1AclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetB1
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+
+  AdditionalSubnetB2AclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetB2
+      NetworkAclId: !Ref AdditionalVPCNetworkAcl
+
+
+Outputs:
+
+  ### VPC OUTPUTS ###
+
+  VPC1Id:
+    Description: "ID of VPC1"
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC1Id"
+
+  VPC2Id:
+    Description: "ID of VPC2"
+    Value: !Ref AdditionalVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC2Id"
+
+  ### PEERING OUTPUTS ###
+
+  VPCPeeringConnectionId:
+    Description: "ID of the VPC Peering Connection"
+    Value: !Ref PeeringSimpleToAdditionalPrivateVpcs
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCPeeringConnectionId"
+
+  ### EC2-RELATED OUTPUTS START ###
+
+  # VPC1 Subnet Outputs
+
+  PublicSubnet1AId:
+    Description: "ID of Public Subnet 1A in VPC1"
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet1AId"
+
+  PrivateSubnet1AId:
+    Description: "ID of Private Subnet 1A in VPC1"
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1AId"
+
+  # VPC2 Subnet Outputs
+
+  PublicSubnet2AId:
+    Description: "ID of Public Subnet 2A in VPC2"
+    Value: !Ref SubnetA1
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2AId"
+
+  PrivateSubnet2AId:
+    Description: "ID of Private Subnet 2A in VPC2"
+    Value: !Ref SubnetA2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2AId"
+
+  PublicSubnet2BId:
+    Description: "ID of Public Subnet 2B in VPC2"
+    Value: !Ref SubnetB1
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2BId"
+
+  PrivateSubnet2BId:
+    Description: "ID of Private Subnet 2B in VPC2"
+    Value: !Ref SubnetB2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2BId"
+
+  # Security Group Outputs
+
+  SecurityGroup1Id:
+    Description: "ID of Security Group in VPC1"
+    Value: !Ref SimpleVPCSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroup1Id"
+
+  SecurityGroup2Id:
+    Description: "ID of Security Group in VPC2"
+    Value: !Ref AdditionalVPCSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroup2Id"
+  
+  # Route Table Outputs
+
+  PublicRouteTable1Id:
+    Description: "ID of Public Route Table in VPC1"
+    Value: !Ref PublicRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicRouteTable1Id"
+
+  PrivateRouteTable1Id:
+    Description: "ID of Private Route Table in VPC1"
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateRouteTable1Id"
+
+  PublicRouteTable2Id:
+    Description: "ID of Public Route Table in VPC2"
+    Value: !Ref AdditionalPublicRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicRouteTable2Id"
+
+  PrivateRouteTable2Id:
+    Description: "ID of Private Route Table in VPC2"
+    Value: !Ref AdditionalPrivateRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateRouteTable2Id"
+
+  ### EC2-RELATED OUTPUTS END ###
+
+
