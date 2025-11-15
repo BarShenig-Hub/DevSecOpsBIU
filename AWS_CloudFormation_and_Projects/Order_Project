@@ -1,0 +1,268 @@
+# This CloudFormation template deploys an SNS-to-SQS filtered messaging pipeline where vegetarian and meat messages flow through separate queues into Lambda functions that process them and store the results in dedicated S3 buckets.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SNS -> SQS (filtered) -> Lambda -> S3 pipeline for Vegetarian and Meat messages
+
+Resources:
+
+  OrdersFilterTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ordersfilter
+
+  VegetarianFoodQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: vegetarianfood
+
+  MeatBasedFoodQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: meatbasedfood
+
+  VegetarianQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref VegetarianFoodQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Allow-SNS-SendMessage-VegQueue
+            Effect: Allow
+            Principal: "*"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt VegetarianFoodQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref OrdersFilterTopic
+
+  MeatQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref MeatBasedFoodQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Allow-SNS-SendMessage-MeatQueue
+            Effect: Allow
+            Principal: "*"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt MeatBasedFoodQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref OrdersFilterTopic
+
+  VegetarianSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrdersFilterTopic
+      Protocol: sqs
+      Endpoint: !GetAtt VegetarianFoodQueue.Arn
+      FilterPolicy:
+        FilterKey:
+          - prefix: "Veg"
+
+  MeatBasedSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrdersFilterTopic
+      Protocol: sqs
+      Endpoint: !GetAtt MeatBasedFoodQueue.Arn
+      FilterPolicy:
+        FilterKey:
+          - prefix: "Meat"
+
+  VegetarianMealBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "vegetarianmeal-${AWS::AccountId}-${AWS::Region}"
+
+  MeatBasedMealBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "meatbasedmeal-${AWS::AccountId}-${AWS::Region}"
+
+  VegetarianLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-vegetarian-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VegetarianLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              # S3 access
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${VegetarianMealBucket.Arn}/*"
+              # SQS permissions
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt VegetarianFoodQueue.Arn
+
+  MeatLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-meat-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: MeatLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              # S3 access
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${MeatBasedMealBucket.Arn}/*"
+              # SQS permissions
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt MeatBasedFoodQueue.Arn
+
+  VegetarianLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-vegetarian-processor"
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt VegetarianLambdaRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref VegetarianMealBucket
+      Tags:
+        - Key: BUCKET_NAME
+          Value: !Ref VegetarianMealBucket
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          s3 = boto3.client('s3')
+          bucket_name = os.environ['BUCKET_NAME']
+
+          def lambda_handler(event, context):
+              for record in event['Records']:
+                  message = json.loads(record['body'])
+                  sns_message = message.get('Message', 'No message content')
+                  subject = message.get('Subject', 'default-subject')
+                  file_name = f"{subject}.txt"
+                  try:
+                      s3.put_object(
+                          Bucket=bucket_name,
+                          Key=file_name,
+                          Body=sns_message
+                      )
+                      print(f"File {file_name} created successfully in bucket {bucket_name}.")
+                  except Exception as e:
+                      print(f"Error uploading file to S3: {e}")
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Processed SNS messages successfully')
+              }
+
+  MeatLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-meat-processor"
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt MeatLambdaRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref MeatBasedMealBucket
+      Tags:
+        - Key: BUCKET_NAME
+          Value: !Ref MeatBasedMealBucket
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          s3 = boto3.client('s3')
+          bucket_name = os.environ['BUCKET_NAME']
+
+          def lambda_handler(event, context):
+              for record in event['Records']:
+                  message = json.loads(record['body'])
+                  sns_message = message.get('Message', 'No message content')
+                  subject = message.get('Subject', 'default-subject')
+                  file_name = f"{subject}.txt"
+                  try:
+                      s3.put_object(
+                          Bucket=bucket_name,
+                          Key=file_name,
+                          Body=sns_message
+                      )
+                      print(f"File {file_name} created successfully in bucket {bucket_name}.")
+                  except Exception as e:
+                      print(f"Error uploading file to S3: {e}")
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Processed SNS messages successfully')
+              }
+
+  VegetarianEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt VegetarianFoodQueue.Arn
+      FunctionName: !Ref VegetarianLambda
+      Enabled: True
+      BatchSize: 10
+
+  MeatEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt MeatBasedFoodQueue.Arn
+      FunctionName: !Ref MeatLambda
+      Enabled: True
+      BatchSize: 10
+
+Outputs:
+  SNSTopicArn:
+    Value: !Ref OrdersFilterTopic
+  VegetarianQueueArn:
+    Value: !GetAtt VegetarianFoodQueue.Arn
+  MeatQueueArn:
+    Value: !GetAtt MeatBasedFoodQueue.Arn
+  VegetarianBucketName:
+    Value: !Ref VegetarianMealBucket
+  MeatBucketName:
+    Value: !Ref MeatBasedMealBucket
