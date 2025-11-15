@@ -1,3 +1,4 @@
+# This CloudFormation template builds two fully configured VPCs—each with public and private subnets, routing, internet gateways, security controls, an S3 VPC endpoint, and a peering connection—allowing them to communicate with one another.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Two VPCs with public and private subnets, routing, and outputs
 
